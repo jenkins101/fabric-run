@@ -14,75 +14,67 @@
 import sys
 import getpass
 import argparse
-from fabric.api import *
+from fabric.api import env,run,sudo,put,settings,hide,execute
 from string import split
 
 
-class ParallelCommands():
-    def __init__(self, **args):
-        self.sudo = args['sudo']
-        self.command = args['command']
-
-    def parallel_exec(self):
-        if self.sudo:
-	    try:
-                stdout = sudo(self.command)
-	    except Exception, e:
-                print_err(env.host_string,': ERROR: failed to connect',e)
-		return
-        else:
-	    try:
-                stdout = run(self.command)
-	    except Exception, e:
-                print_err(env.host_string,': ERROR: failed to connect',e)
-		return
-        return stdout
-
-    def capture(self):
-        with settings(hide('running', 'commands', 'stdout', 'stderr', 'warnings', 'aborts')):
-            stdout = execute(self.parallel_exec)
-        return stdout
-
-
-class ParallelScript():
-    def __init__(self, **args):
-        self.sudo = args['sudo']
-        self.filename = args['filename']
-        self.command = '\$HOME/%s' % self.filename.split('/')[-1] 
-
-    def parallel_exec(self):
-
-        """ Try to put the file in running users homedir """
-        try:
-            put(self.filename, mode=0755) 
-        except Exception, e:
-            print_err( env.host_string,': ERROR: failed to send file', e )
-            return
-
-        if self.sudo:
-            stdout = sudo(self.command)
-        else:
-            stdout = run(self.command)
-        """ remove script from remote homedir """
-        run('rm %s' % self.filename.split('/')[-1])
-        return stdout
-
-    def capture(self):
-        with settings(hide('running', 'commands', 'stdout', 'stderr', 'warnings','aborts')):
-            stdout = execute(self.parallel_exec)
-        return stdout
+def FabricRun(args):
+    with settings(hide('running', 'commands', 'stdout', 'stderr', 'warnings','aborts')):
+        return execute(args['func'], args)
 
 
 def run_command(args):
-    instance = ParallelCommands(sudo=args['sudo'], command=args['command'])
-    return instance.capture()
+    return Exec(args['command'])
+
 
 def run_script(args):
-    instance = ParallelScript(sudo=args['sudo'], filename=args['filename'])
-    return instance.capture()
+    filename = args['filename']
+    command = '\$HOME/%s' % filename.split('/')[-1]
+    try:
+        put(filename, mode=0755)
+    except Exception, e:
+        print_err( env.host_string,': ERROR: failed to send file', e )
+        return
+    stdout = Exec(command)
+
+    # remove script from remote homedir
+    run('rm %s' % filename.split('/')[-1])
+
+    return stdout
+
 
 def print_err(*args):
     sys.stderr.write(' '.join(map(str,args)) + '\n')
+
+
+def Exec(command):
+    try:
+        stdout = runwith(command)
+    except Exception, e:
+        print_err(env.host_string,': ERROR: failed to connect',e)
+        return
+    return stdout
+
+
+def clean_print(output):
+    print
+    for host in hosts:
+        if output[host]:
+            print '%s:' % host
+            print output[host]
+            print
+
+
+def fabric_print(output):
+    print
+    for host in hosts:
+        if output[host]:
+            print '%s:' % host
+            for line in split(output[host],'\n'):
+                print '[%s] out: %s' % (host, line)
+            print '[%s] out: ' % host
+            print
+
 
 if __name__ == "__main__":
     """ main() """
@@ -129,18 +121,32 @@ if __name__ == "__main__":
     if not args['password']:
         args['password'] = getpass.getpass('Enter password for %s: ' % (args['username']))
 
+    if args['sudo']:
+        runwith = sudo
+    else:
+        runwith = run
+
+
+    # allways use parallel mode, we cant get a prompt any way.
+    env.parallel=True
+    env.pool_size = args['pool_size']
+
     # init fabric environment
     env.warn_only=True
     env.abort_exception=Exception
     env.skip_bad_hosts=True
-    env.parallel=True
     env.hosts = hosts
     env.user = args['username']
     env.password = args['password']
-    env.pool_size = args['pool_size']
 
     # Call the function requested
-    output = args['func'](args)
+    #output = args['func'](args)
+    output = FabricRun(args)
+
+    if args['clean_stdout']:
+        clean_print(output)
+    else:
+        fabric_print(output)
 
 
 """
@@ -150,16 +156,15 @@ The output of each server is inside a dictionary:
 Only hosts with output will be printed
 """
 
-print
-for host in hosts:
-    if output[host]:
-        print '%s:' % host
-        if args['clean_stdout']:
-            print output[host]
-            print
-        else: 
-            for line in split(output[host],'\n'):
-                print '[%s] out: %s' % (host, line)
-            print '[%s] out: ' % host
-            print
-
+#print
+#for host in hosts:
+#    if output[host]:
+#        print '%s:' % host
+#        if args['clean_stdout']:
+#            print output[host]
+#            print
+#        else:
+#            for line in split(output[host],'\n'):
+#                print '[%s] out: %s' % (host, line)
+#            print '[%s] out: ' % host
+#            print
