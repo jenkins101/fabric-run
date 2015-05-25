@@ -1,0 +1,152 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+#
+# by Daniel Forsberg (danfor)
+#
+# this script makes it possible to run fabric in parallel and still be able to read the output per host.
+#
+# can run a command or send a script to run.
+# can use host list or hosts on cmd line separated by ','
+#
+# for more info see help (-h)
+#
+
+import sys
+import getpass
+import argparse
+from fabric.api import *
+from string import split
+
+class ParallelCommands():
+    def __init__(self, **args):
+        self.sudo = args['sudo']
+        self.command = args['command']
+
+    def parallel_exec(self):
+        if self.sudo:
+            stdout = sudo(self.command)
+        else:
+            stdout = run(self.command)
+        return stdout
+
+    def capture(self):
+        with settings(hide('running', 'commands', 'stdout', 'stderr', 'warnings')):
+            stdout = execute(self.parallel_exec)
+        return stdout
+
+
+class ParallelScript():
+    def __init__(self, **args):
+        self.sudo = args['sudo']
+        self.filename = args['filename']
+        self.command = '\$HOME/%s' % self.filename.split('/')[-1] 
+
+    def parallel_exec(self):
+
+        """ Try to put the file in running users homedir """
+        try:
+            put(self.filename, mode=0755) 
+        except Exception, e:
+            print env.host_string,': ERROR: failed to send file', e
+            return
+
+        if self.sudo:
+            stdout = sudo(self.command)
+        else:
+            stdout = run(self.command)
+        """ remove script from remote homedir """
+        run('rm %s' % self.filename.split('/')[-1])
+        return stdout
+
+    def capture(self):
+        with settings(hide('running', 'commands', 'stdout', 'stderr', 'warnings')):
+            stdout = execute(self.parallel_exec)
+        return stdout
+
+
+def run_command(args):
+    instance = ParallelCommands(hosts=hosts, username=args['username'], password=args['password'], pool_size=args['pool_size'], sudo=args['sudo'], command=args['command'])
+    return instance.capture()
+
+def run_script(args):
+    instance = ParallelScript(hosts=hosts, username=args['username'], password=args['password'], pool_size=args['pool_size'], sudo=args['sudo'], filename=args['filename'])
+    return instance.capture()
+
+if __name__ == "__main__":
+    """ main() """
+
+    # Set up argument parser
+    parser = argparse.ArgumentParser()
+
+    #parser.add_argument("-v", "--version", action="version", version='%(prog)s $Id$')
+    parser.add_argument("-v", "--version", action="version", version='%(prog)s 0.0.1')
+    parser.add_argument("-u", "--username", default=env.user, help="username, defaults to running user")
+    parser.add_argument("-P", "--password", help="password, will be asked for if not used")
+    parser.add_argument("-p", "--pool_size", type=int, default=1, help="numeber of hosts to run in parallel")
+    parser.add_argument("-s", "--sudo", action="store_true", default=False, help="run using sudo")
+    parser.add_argument("-c", "--clean_stdout", action="store_true", default=False, help="clean output mode")
+
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("-l", "--host_list", help="a list containing hosts to work on")
+    group.add_argument("-H", "--hosts", help="list of hosts separated by ',' to work on")
+
+    cmdparsers = parser.add_subparsers(title="subcommands", help="choose command")
+
+    # script command arguments
+    cmdparser_script = cmdparsers.add_parser("run-script", help="run a script")
+    cmdparser_script.add_argument("filename", help="the script to send and run")
+    cmdparser_script.set_defaults(func=run_script)
+
+    # commad command arguments
+    cmdparser_command = cmdparsers.add_parser("run-command", help="run a command")
+    cmdparser_command.add_argument("command", help="the command to run")
+    cmdparser_command.set_defaults(func=run_command)
+
+    args = vars(parser.parse_args())
+
+
+    if args['hosts']:
+        hosts = args['hosts'].split(',')
+        map(str.strip, hosts)
+    elif args['host_list']:
+        hosts = [x.strip() for x in open(args['host_list'],"r").readlines()]
+    else:
+        print "no hosts"
+        sys.exit(1)
+
+    if not args['password']:
+        args['password'] = getpass.getpass("Enter password for %s: " % (args['username']))
+
+    # init fabric environment
+    env.warn_only=True
+    env.skip_bad_hosts=True
+    env.parallel=True
+    env.hosts = hosts
+    env.user = args['username']
+    env.password = args['password']
+    env.pool_size = args['pool_size']
+
+    # Call the function requested
+    output = args['func'](args)
+
+
+"""
+The output of each server is inside a dictionary:
+{ 'server1': 'output', 'server2': 'output' }
+
+Only hosts with output will be printed
+"""
+
+print
+for host in hosts:
+    if output[host]:
+        print '%s:' % host
+        if args['clean_stdout']:
+            print output[host]
+            print
+        else: 
+            for line in split(output[host],'\n'):
+                print '[%s] out: %s' % (host, line)
+            print '[%s] out: ' % host
+            print
+
