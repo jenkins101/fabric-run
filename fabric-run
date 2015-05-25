@@ -17,6 +17,7 @@ import argparse
 from fabric.api import *
 from string import split
 
+
 class ParallelCommands():
     def __init__(self, **args):
         self.sudo = args['sudo']
@@ -24,13 +25,21 @@ class ParallelCommands():
 
     def parallel_exec(self):
         if self.sudo:
-            stdout = sudo(self.command)
+	    try:
+                stdout = sudo(self.command)
+	    except Exception, e:
+                print_err(env.host_string,': ERROR: failed to connect',e)
+		return
         else:
-            stdout = run(self.command)
+	    try:
+                stdout = run(self.command)
+	    except Exception, e:
+                print_err(env.host_string,': ERROR: failed to connect',e)
+		return
         return stdout
 
     def capture(self):
-        with settings(hide('running', 'commands', 'stdout', 'stderr', 'warnings')):
+        with settings(hide('running', 'commands', 'stdout', 'stderr', 'warnings', 'aborts')):
             stdout = execute(self.parallel_exec)
         return stdout
 
@@ -47,7 +56,7 @@ class ParallelScript():
         try:
             put(self.filename, mode=0755) 
         except Exception, e:
-            print env.host_string,': ERROR: failed to send file', e
+            print_err( env.host_string,': ERROR: failed to send file', e )
             return
 
         if self.sudo:
@@ -59,18 +68,21 @@ class ParallelScript():
         return stdout
 
     def capture(self):
-        with settings(hide('running', 'commands', 'stdout', 'stderr', 'warnings')):
+        with settings(hide('running', 'commands', 'stdout', 'stderr', 'warnings','aborts')):
             stdout = execute(self.parallel_exec)
         return stdout
 
 
 def run_command(args):
-    instance = ParallelCommands(hosts=hosts, username=args['username'], password=args['password'], pool_size=args['pool_size'], sudo=args['sudo'], command=args['command'])
+    instance = ParallelCommands(sudo=args['sudo'], command=args['command'])
     return instance.capture()
 
 def run_script(args):
-    instance = ParallelScript(hosts=hosts, username=args['username'], password=args['password'], pool_size=args['pool_size'], sudo=args['sudo'], filename=args['filename'])
+    instance = ParallelScript(sudo=args['sudo'], filename=args['filename'])
     return instance.capture()
+
+def print_err(*args):
+    sys.stderr.write(' '.join(map(str,args)) + '\n')
 
 if __name__ == "__main__":
     """ main() """
@@ -111,14 +123,15 @@ if __name__ == "__main__":
     elif args['host_list']:
         hosts = [x.strip() for x in open(args['host_list'],"r").readlines()]
     else:
-        print "no hosts"
+        print_err('no hosts')
         sys.exit(1)
 
     if not args['password']:
-        args['password'] = getpass.getpass("Enter password for %s: " % (args['username']))
+        args['password'] = getpass.getpass('Enter password for %s: ' % (args['username']))
 
     # init fabric environment
     env.warn_only=True
+    env.abort_exception=Exception
     env.skip_bad_hosts=True
     env.parallel=True
     env.hosts = hosts
